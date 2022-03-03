@@ -1,0 +1,5 @@
+- <path> = '/WorkerData/CSV/Cities.csv'
+- FileRead <path>
+| FromCSV
+| ToJsonArray
+|FileWrite '/WorkerData/Json/Cities.json'

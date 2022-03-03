@@ -1,0 +1,7 @@
+{
+    "service": {
+        "name": "ElasticSearch_ELK",
+		"address": "es01",
+        "port": 9200
+    }
+}

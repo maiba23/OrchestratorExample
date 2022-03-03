@@ -1,0 +1,158 @@
+version: '3'
+
+volumes:
+  elasticdata:
+
+services:
+  rabbitmq:
+    image: rabbitmq:management
+    container_name: reductech-rabbitmq
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+
+  consul:
+    image: consul
+    container_name: reductech-consul
+    restart: always
+    volumes:
+      - ./config/consul/elasticsearch.service.json:/consul/config/elasticsearch.service.json:ro
+    ports:
+      - '8500:8500'
+
+  es01:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.12.1
+    container_name: reductech-elastic
+    environment:
+      - node.name=es01
+      - cluster.name=es-docker-cluster
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - 'ES_JAVA_OPTS=-Xms3g -Xmx3g'
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - elasticdata:/usr/share/elasticsearch/data
+    ports:
+      - '9200:9200'
+
+  # kibana:
+  #   image: docker.elastic.co/kibana/kibana:7.12.1
+  #   container_name: reductech-kibana
+  #   ports:
+  #     - '5601:5601'
+  #   environment:
+  #     ELASTICSEARCH_URL: http://es01:9200
+  #     ELASTICSEARCH_HOSTS: '["http://es01:9200"]'
+  #   depends_on:
+  #     - es01
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:7.12.1
+    container_name: reductech-logstash
+    environment:
+      - 'LS_JAVA_OPTS=-Xms2g -Xmx2g'
+    ports:
+      - '5044:5044'
+    volumes:
+      - ./config/logstash/pipeline:/usr/share/logstash/pipeline
+      - ./config/logstash/config:/usr/share/logstash/config
+    depends_on:
+      - es01
+      - rabbitmq
+
+  mariadb:
+    image: mariadb/server:10.3
+    container_name: reductech-mariadb
+    ports:
+      - '3306:3306'
+    environment:
+      - MYSQL_ROOT_PASSWORD=Steeltoe456
+    volumes:
+      - ./data/mariadb:/var/lib/mysql:rw
+
+  configserver:
+    image: steeltoeoss/config-server
+    container_name: reductech-config
+    environment:
+      - spring.cloud.config.server.git.uri=${CONFIGREPO_URI}
+      - spring.cloud.config.server.git.username=${CONFIGREPO_USERNAME}
+      - spring.cloud.config.server.git.password=${CONFIGREPO_PASSWORD}
+    ports:
+      - '8888:8888'
+
+  datastore:
+    image: registry.gitlab.com/reductech/forensync/orchestrator/datastore:main
+    container_name: reductech-datastore
+    environment:
+      - 'spring:cloud:config:name=Reductech-Datastore, Settings, TraceLogging'
+    depends_on:
+      - rabbitmq
+      - configserver
+      - mariadb
+      - consul
+    restart: on-failure:5
+
+  sequencer:
+    image: registry.gitlab.com/reductech/forensync/orchestrator/sequencer:main
+    container_name: reductech-sequencer
+    environment:
+      - 'spring:cloud:config:name=Reductech-Sequencer, Settings, TraceLogging'
+    depends_on:
+      - rabbitmq
+      - configserver
+      - consul
+    restart: on-failure:5
+
+  healthchecker:
+    image: registry.gitlab.com/reductech/forensync/orchestrator/healthchecker:main
+    container_name: reductech-healthchecker
+    environment:
+      - 'spring:cloud:config:name=Reductech-HealthChecker, Settings, TraceLogging'
+    depends_on:
+      - rabbitmq
+      - configserver
+      - consul
+    restart: on-failure:5
+
+  clientapi:
+    image: registry.gitlab.com/reductech/forensync/orchestrator/clientapi:main
+    container_name: reductech-clientapi
+    environment:
+      - 'spring:cloud:config:name=Reductech-Orchestrator-API, Settings, TraceLogging'
+    ports:
+      - '8080:80'
+    depends_on:
+      - rabbitmq
+      - configserver
+      - consul
+    restart: on-failure:5
+
+  worker:
+    image: registry.gitlab.com/reductech/forensync/orchestrator/worker:main
+    container_name: reductech-worker
+    environment:
+      - 'spring:cloud:config:name=Settings, TraceLogging, Reductech-Worker'
+    depends_on:
+      - rabbitmq
+      - configserver
+      - consul
+    restart: on-failure:5
+    volumes:
+      - ./WorkerData:/WorkerData:rw
+
+  vault:
+    image: hashicorp/vault
+    container_name: reductech-vault
+    environment:
+      - cap-add=IPC_LOCK
+    volumes:
+      - ./config/vault:/vault/config:rw
+      - ./data/vault:/vault/file:rw
+    ports:
+      - '8200:8200'
+    command:
+      - server
+    privileged: true
